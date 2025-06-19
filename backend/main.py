@@ -340,6 +340,87 @@ def call_openai_with_prompt(prompt_text):
         
         raise HTTPException(status_code=500, detail=f"Failed to generate release note with OpenAI: {str(e)}")
 
+@app.get("/repositories")
+def get_repositories():
+    """Get list of repositories for the configured GitHub owner"""
+    if not all([GITHUB_TOKEN, GITHUB_OWNER]):
+        missing_vars = []
+        if not GITHUB_TOKEN:
+            missing_vars.append("GITHUB_TOKEN")
+        if not GITHUB_OWNER:
+            missing_vars.append("GITHUB_OWNER")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Missing environment variables: {', '.join(missing_vars)}"
+        )
+    
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    
+    try:
+        # Fetch repositories for the user/organization
+        repos_url = f"https://api.github.com/users/{GITHUB_OWNER}/repos"
+        logger.info(f"Fetching repositories for {GITHUB_OWNER}")
+        
+        all_repos = []
+        page = 1
+        
+        # Handle pagination
+        while True:
+            response = requests.get(repos_url, headers=headers, params={
+                "per_page": 100,
+                "page": page,
+                "sort": "updated",
+                "direction": "desc"
+            })
+            
+            if response.status_code != 200:
+                logger.error(f"Failed to fetch repositories: {response.text}")
+                raise HTTPException(
+                    status_code=response.status_code, 
+                    detail=f"Failed to fetch repositories from GitHub: {response.text}"
+                )
+            
+            repos_batch = response.json()
+            if not repos_batch:
+                break
+                
+            all_repos.extend(repos_batch)
+            
+            if len(repos_batch) < 100:
+                break
+                
+            page += 1
+            # Limit to prevent abuse
+            if page > 10:
+                break
+        
+        # Extract relevant repository information
+        repo_list = []
+        for repo in all_repos:
+            repo_info = {
+                "name": repo.get("name"),
+                "full_name": repo.get("full_name"),
+                "description": repo.get("description"),
+                "private": repo.get("private", False),
+                "updated_at": repo.get("updated_at"),
+                "language": repo.get("language")
+            }
+            repo_list.append(repo_info)
+        
+        logger.info(f"Successfully fetched {len(repo_list)} repositories")
+        return {
+            "repositories": repo_list,
+            "total_count": len(repo_list),
+            "owner": GITHUB_OWNER
+        }
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Network error while fetching repositories: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Network error connecting to GitHub: {str(e)}")
+
 @app.get("/test-jira/{ticket_key}")
 def test_jira_connection(ticket_key: str):
     """Test endpoint to verify JIRA connection using environment variables"""
