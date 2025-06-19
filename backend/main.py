@@ -13,6 +13,8 @@ load_dotenv()
 JIRA_TOKEN = os.getenv("JIRA_TOKEN")
 JIRA_EMAIL = os.getenv("JIRA_EMAIL")
 JIRA_BASE_URL = os.getenv("JIRA_BASE_URL")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+GITHUB_OWNER = os.getenv("GITHUB_OWNER")
 
 def convert_adf_to_text(adf_content):
     """
@@ -89,13 +91,8 @@ app.add_middleware(
 )
 
 class GenerateReleaseNoteRequest(BaseModel):
-    github_token: str
-    owner: str
     repo: str
     jira_ticket: str
-    jira_base_url: str  # e.g., "https://company.atlassian.net"
-    jira_email: str     # JIRA user email
-    jira_api_token: str # JIRA API token
 
 def fetch_jira_ticket_content(jira_base_url: str, jira_email: str, jira_api_token: str, ticket_key: str):
     """
@@ -193,14 +190,35 @@ def test_jira_connection(ticket_key: str):
 
 @app.post("/generate-release-note/")
 def generate_release_note(data: GenerateReleaseNoteRequest):
-    logger.info(f"Received request to generate release note for repo '{data.owner}/{data.repo}' and ticket '{data.jira_ticket}'")
+    logger.info(f"Received request to generate release note for repo '{GITHUB_OWNER}/{data.repo}' and ticket '{data.jira_ticket}'")
+    
+    # Check if required environment variables are set
+    if not all([JIRA_BASE_URL, JIRA_EMAIL, JIRA_TOKEN, GITHUB_TOKEN, GITHUB_OWNER]):
+        missing_vars = []
+        if not JIRA_BASE_URL:
+            missing_vars.append("JIRA_BASE_URL")
+        if not JIRA_EMAIL:
+            missing_vars.append("JIRA_EMAIL")
+        if not JIRA_TOKEN:
+            missing_vars.append("JIRA_TOKEN")
+        if not GITHUB_TOKEN:
+            missing_vars.append("GITHUB_TOKEN")
+        if not GITHUB_OWNER:
+            missing_vars.append("GITHUB_OWNER")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Missing environment variables: {', '.join(missing_vars)}"
+        )
+    
+    # Type assertions since we validated they're not None above
+    assert JIRA_BASE_URL and JIRA_EMAIL and JIRA_TOKEN and GITHUB_TOKEN and GITHUB_OWNER
     
     # First, fetch JIRA ticket content
     try:
         jira_content = fetch_jira_ticket_content(
-            data.jira_base_url.lstrip('@'),  # Remove @ if present
-            data.jira_email,
-            data.jira_api_token,
+            JIRA_BASE_URL,
+            JIRA_EMAIL,
+            JIRA_TOKEN,
             data.jira_ticket
         )
         logger.info(f"Successfully fetched JIRA ticket content: {jira_content['summary']}")
@@ -210,10 +228,10 @@ def generate_release_note(data: GenerateReleaseNoteRequest):
     
     # Continue with GitHub commit fetching
     headers = {
-        "Authorization": f"token {data.github_token}",
+        "Authorization": f"token {GITHUB_TOKEN}",
         "Accept": "application/vnd.github.v3+json"
     }
-    commits_url = f"https://api.github.com/repos/{data.owner}/{data.repo}/commits"
+    commits_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{data.repo}/commits"
     all_commits = []
     page = 1
 
@@ -249,7 +267,7 @@ def generate_release_note(data: GenerateReleaseNoteRequest):
     result = []
     for c in matching_commits:
         sha = c['sha']
-        commit_url = f"https://api.github.com/repos/{data.owner}/{data.repo}/commits/{sha}"
+        commit_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{data.repo}/commits/{sha}"
         logger.info(f"Fetching diff for commit {sha}...")
         commit_resp = requests.get(commit_url, headers=headers)
         if commit_resp.status_code != 200:
