@@ -7,6 +7,8 @@ import os
 import requests
 import re
 import base64
+import json
+from openai import OpenAI
 
 load_dotenv()
 
@@ -15,6 +17,10 @@ JIRA_EMAIL = os.getenv("JIRA_EMAIL")
 JIRA_BASE_URL = os.getenv("JIRA_BASE_URL")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_OWNER = os.getenv("GITHUB_OWNER")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# Initialize OpenAI client
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 def convert_adf_to_text(adf_content):
     """
@@ -167,6 +173,84 @@ def fetch_jira_ticket_content(jira_base_url: str, jira_email: str, jira_api_toke
         logger.error(f"Network error while connecting to JIRA: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Network error connecting to JIRA: {str(e)}")
 
+def format_jira_ticket_for_prompt(jira_ticket):
+    """
+    Format JIRA ticket data for inclusion in the prompt
+    """
+    formatted = f"""
+Ticket Key: {jira_ticket.get('key', 'N/A')}
+Summary: {jira_ticket.get('summary', 'N/A')}
+Status: {jira_ticket.get('status', 'N/A')}
+Priority: {jira_ticket.get('priority', 'N/A')}
+Issue Type: {jira_ticket.get('issue_type', 'N/A')}
+Assignee: {jira_ticket.get('assignee', 'N/A')}
+Reporter: {jira_ticket.get('reporter', 'N/A')}
+Created: {jira_ticket.get('created', 'N/A')}
+Updated: {jira_ticket.get('updated', 'N/A')}
+
+Description:
+{jira_ticket.get('description', 'No description available')}
+"""
+    return formatted.strip()
+
+def format_commit_diffs_for_prompt(commit_diffs):
+    """
+    Format commit diffs data for inclusion in the prompt
+    """
+    if not commit_diffs:
+        return "No commit diffs available"
+    
+    formatted_diffs = []
+    for commit in commit_diffs:
+        commit_section = f"""
+Commit SHA: {commit.get('sha', 'N/A')}
+Commit Message: {commit.get('message', 'N/A')}
+
+Files Changed:
+"""
+        for file_info in commit.get('files', []):
+            filename = file_info.get('filename', 'Unknown file')
+            patch = file_info.get('patch', 'No patch available')
+            commit_section += f"""
+File: {filename}
+Diff:
+{patch}
+
+"""
+        formatted_diffs.append(commit_section)
+    
+    return "\n".join(formatted_diffs)
+
+def call_openai_with_prompt(prompt_text):
+    """
+    Send the populated prompt to OpenAI and return the response
+    """
+    try:
+        logger.info("Sending prompt to OpenAI...")
+        
+        response = client.chat.completions.create(
+            model="gpt-4",  # You can change this to gpt-3.5-turbo if needed
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a senior technical release note writer with expertise in software development, QA handoff, and summarizing code changes for mixed technical and non-technical audiences."
+                },
+                {
+                    "role": "user", 
+                    "content": prompt_text
+                }
+            ],
+            max_tokens=2000,
+            temperature=0.3
+        )
+        
+        logger.info("Successfully received response from OpenAI")
+        return response.choices[0].message.content
+        
+    except Exception as e:
+        logger.error(f"Error calling OpenAI API: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate release note with OpenAI: {str(e)}")
+
 @app.get("/test-jira/{ticket_key}")
 def test_jira_connection(ticket_key: str):
     """Test endpoint to verify JIRA connection using environment variables"""
@@ -193,6 +277,151 @@ def generate_release_note(data: GenerateReleaseNoteRequest):
     logger.info(f"Received request to generate release note for repo '{GITHUB_OWNER}/{data.repo}' and ticket '{data.jira_ticket}'")
     
     # Check if required environment variables are set
+    if not all([JIRA_BASE_URL, JIRA_EMAIL, JIRA_TOKEN, GITHUB_TOKEN, GITHUB_OWNER, OPENAI_API_KEY]):
+        missing_vars = []
+        if not JIRA_BASE_URL:
+            missing_vars.append("JIRA_BASE_URL")
+        if not JIRA_EMAIL:
+            missing_vars.append("JIRA_EMAIL")
+        if not JIRA_TOKEN:
+            missing_vars.append("JIRA_TOKEN")
+        if not GITHUB_TOKEN:
+            missing_vars.append("GITHUB_TOKEN")
+        if not GITHUB_OWNER:
+            missing_vars.append("GITHUB_OWNER")
+        if not OPENAI_API_KEY:
+            missing_vars.append("OPENAI_API_KEY")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Missing environment variables: {', '.join(missing_vars)}"
+        )
+    
+    # Type assertions since we validated they're not None above
+    assert JIRA_BASE_URL and JIRA_EMAIL and JIRA_TOKEN and GITHUB_TOKEN and GITHUB_OWNER and OPENAI_API_KEY
+    
+    # First, fetch JIRA ticket content
+    try:
+        jira_content = fetch_jira_ticket_content(
+            JIRA_BASE_URL,
+            JIRA_EMAIL,
+            JIRA_TOKEN,
+            data.jira_ticket
+        )
+        logger.info(f"Successfully fetched JIRA ticket content: {jira_content['summary']}")
+    except Exception as e:
+        logger.error(f"Failed to fetch JIRA ticket content: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch JIRA ticket: {str(e)}")
+    
+    # Continue with GitHub commit fetching
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    commits_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{data.repo}/commits"
+    all_commits = []
+    page = 1
+
+    # Fetch all commits with pagination (up to 1000 commits)
+    logger.info("Fetching commits from GitHub...")
+    while True:
+        resp = requests.get(commits_url, headers=headers, params={"per_page": 100, "page": page})
+        logger.info(f"Requested page {page} of commits. Status: {resp.status_code}")
+        if resp.status_code != 200:
+            logger.error(f"Failed to fetch commits from GitHub: {resp.text}")
+            raise HTTPException(status_code=resp.status_code, detail="Failed to fetch commits from GitHub.")
+        batch = resp.json()
+        if not batch:
+            logger.info("No more commits found, ending pagination.")
+            break
+        all_commits.extend(batch)
+        if len(batch) < 100:
+            logger.info("Last page of commits reached.")
+            break
+        page += 1
+        if page > 10:
+            logger.warning("Hard limit of 1000 commits reached, stopping pagination to prevent abuse.")
+            break
+
+    logger.info(f"Total commits fetched: {len(all_commits)}")
+
+    pattern = rf"^\[{re.escape(data.jira_ticket)}\]"
+    matching_commits = [
+        c for c in all_commits if re.match(pattern, c['commit']['message'])
+    ]
+    logger.info(f"Found {len(matching_commits)} commits matching pattern '[{data.jira_ticket}]'.")
+
+    commit_diffs = []
+    for c in matching_commits:
+        sha = c['sha']
+        commit_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{data.repo}/commits/{sha}"
+        logger.info(f"Fetching diff for commit {sha}...")
+        commit_resp = requests.get(commit_url, headers=headers)
+        if commit_resp.status_code != 200:
+            logger.warning(f"Failed to fetch diff for commit {sha}: {commit_resp.text}")
+            continue
+        commit_data = commit_resp.json()
+        files = [
+            {
+                "filename": f.get("filename", ""),
+                "patch": f.get("patch", ""),
+            }
+            for f in commit_data.get("files", [])
+        ]
+        logger.info(f"Commit {sha}: {len(files)} files with diffs.")
+        commit_diffs.append({
+            "sha": sha,
+            "message": c['commit']['message'],
+            "files": files
+        })
+
+    logger.info(f"Found {len(commit_diffs)} commit diffs to process.")
+    
+    # Read the prompt template
+    try:
+        with open("prompt.txt", "r", encoding="utf-8") as f:
+            prompt_template = f.read()
+        logger.info("Successfully read prompt template")
+    except FileNotFoundError:
+        logger.error("prompt.txt file not found")
+        raise HTTPException(status_code=500, detail="prompt.txt template file not found")
+    except Exception as e:
+        logger.error(f"Error reading prompt template: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error reading prompt template: {str(e)}")
+    
+    # Format the data for the prompt
+    formatted_jira_ticket = format_jira_ticket_for_prompt(jira_content)
+    formatted_commit_diffs = format_commit_diffs_for_prompt(commit_diffs)
+    
+    # Replace placeholders in the prompt template
+    populated_prompt = prompt_template.replace(
+        "<PASTE_JIRA_TICKET_CONTENT_HERE>", 
+        formatted_jira_ticket
+    ).replace(
+        "<PASTE_GIT_DIFFS_HERE>", 
+        formatted_commit_diffs
+    )
+    
+    logger.info("Successfully populated prompt template with JIRA and GitHub data")
+    
+    # Send to OpenAI and get the response
+    release_note = call_openai_with_prompt(populated_prompt)
+    
+    return {
+        "success": True,
+        "release_note": release_note,
+        "jira_ticket_key": data.jira_ticket,
+        "repository": f"{GITHUB_OWNER}/{data.repo}",
+        "commits_processed": len(commit_diffs)
+    }
+
+@app.post("/generate-release-note-debug/")
+def generate_release_note_debug(data: GenerateReleaseNoteRequest):
+    """
+    Debug endpoint that returns raw JIRA ticket and commit diffs without calling OpenAI
+    """
+    logger.info(f"Received debug request for repo '{GITHUB_OWNER}/{data.repo}' and ticket '{data.jira_ticket}'")
+    
+    # Check if required environment variables are set (excluding OpenAI for debug)
     if not all([JIRA_BASE_URL, JIRA_EMAIL, JIRA_TOKEN, GITHUB_TOKEN, GITHUB_OWNER]):
         missing_vars = []
         if not JIRA_BASE_URL:
