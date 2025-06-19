@@ -195,29 +195,68 @@ Description:
 
 def format_commit_diffs_for_prompt(commit_diffs):
     """
-    Format commit diffs data for inclusion in the prompt
+    Format commit diffs data for inclusion in the prompt (optimized for token limit)
     """
     if not commit_diffs:
         return "No commit diffs available"
     
     formatted_diffs = []
-    for commit in commit_diffs:
-        commit_section = f"""
-Commit SHA: {commit.get('sha', 'N/A')}
-Commit Message: {commit.get('message', 'N/A')}
-
-Files Changed:
-"""
-        for file_info in commit.get('files', []):
-            filename = file_info.get('filename', 'Unknown file')
-            patch = file_info.get('patch', 'No patch available')
-            commit_section += f"""
-File: {filename}
-Diff:
-{patch}
-
-"""
+    max_commits = 10  # Limit number of commits to prevent overflow
+    max_files_per_commit = 15  # Limit files per commit
+    max_patch_lines = 30  # Limit patch lines per file
+    
+    for i, commit in enumerate(commit_diffs[:max_commits]):
+        commit_section = f"Commit {i+1}: {commit.get('sha', 'N/A')[:8]}\nMessage: {commit.get('message', 'N/A')}\n"
+        
+        files = commit.get('files', [])[:max_files_per_commit]
+        if len(commit.get('files', [])) > max_files_per_commit:
+            commit_section += f"Files: {len(files)} shown (of {len(commit.get('files', []))} total)\n"
+        else:
+            commit_section += f"Files: {len(files)}\n"
+        
+        for file_info in files:
+            filename = file_info.get('filename', 'Unknown')
+            patch = file_info.get('patch', '')
+            
+            # Skip binary files or very large patches
+            if not patch or 'Binary file' in patch:
+                commit_section += f"- {filename}: Binary/No diff\n"
+                continue
+            
+            # Clean and truncate patch
+            patch_lines = patch.split('\n')
+            
+            # Remove diff headers and keep only meaningful content
+            clean_lines = []
+            for line in patch_lines:
+                # Skip diff metadata lines
+                if line.startswith('@@') or line.startswith('diff --git') or line.startswith('index '):
+                    continue
+                # Keep additions, deletions, and context
+                if line.startswith(('+', '-', ' ')) and len(line.strip()) > 1:
+                    # Remove excessive whitespace but keep indentation structure
+                    clean_line = line.rstrip()
+                    if len(clean_line) > 120:  # Truncate very long lines
+                        clean_line = clean_line[:117] + "..."
+                    clean_lines.append(clean_line)
+            
+            # Limit number of lines
+            if len(clean_lines) > max_patch_lines:
+                truncated_lines = clean_lines[:max_patch_lines]
+                truncated_lines.append(f"... ({len(clean_lines) - max_patch_lines} more lines)")
+                clean_lines = truncated_lines
+            
+            if clean_lines:
+                commit_section += f"- {filename}:\n"
+                commit_section += '\n'.join(clean_lines[:max_patch_lines]) + '\n'
+            else:
+                commit_section += f"- {filename}: No significant changes\n"
+        
+        commit_section += "\n"
         formatted_diffs.append(commit_section)
+    
+    if len(commit_diffs) > max_commits:
+        formatted_diffs.append(f"... and {len(commit_diffs) - max_commits} more commits")
     
     return "\n".join(formatted_diffs)
 
@@ -228,12 +267,33 @@ def call_openai_with_prompt(prompt_text):
     try:
         logger.info("Sending prompt to OpenAI...")
         
+        # Estimate token count (rough approximation: 1 token ≈ 4 characters)
+        estimated_tokens = len(prompt_text) // 4
+        max_tokens_for_prompt = 6000  # Leave room for response
+        
+        # If prompt is too long, truncate it intelligently
+        if estimated_tokens > max_tokens_for_prompt:
+            logger.warning(f"Prompt estimated at {estimated_tokens} tokens, truncating to fit context window")
+            # Truncate to approximately 6000 tokens worth of characters
+            max_chars = max_tokens_for_prompt * 4
+            
+            # Try to truncate at a natural boundary (end of a commit or section)
+            truncation_point = max_chars
+            for boundary in ["\n\nCommit ", "\nCommit ", "\n\n", "\n"]:
+                last_boundary = prompt_text.rfind(boundary, 0, max_chars)
+                if last_boundary > max_chars * 0.8:  # Don't truncate too aggressively
+                    truncation_point = last_boundary
+                    break
+            
+            prompt_text = prompt_text[:truncation_point] + "\n\n[Note: Content truncated due to length limits]"
+            logger.info(f"Truncated prompt to approximately {len(prompt_text) // 4} tokens")
+        
         response = client.chat.completions.create(
-            model="gpt-4",  # You can change this to gpt-3.5-turbo if needed
+            model="gpt-4-turbo-preview",  # Has 128k context window vs 8k for gpt-4
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a senior technical release note writer with expertise in software development, QA handoff, and summarizing code changes for mixed technical and non-technical audiences."
+                    "content": "You are a senior technical release note writer. Be concise but comprehensive in your analysis."
                 },
                 {
                     "role": "user", 
@@ -249,6 +309,35 @@ def call_openai_with_prompt(prompt_text):
         
     except Exception as e:
         logger.error(f"Error calling OpenAI API: {str(e)}")
+        # If it's still a context length error, try with even more aggressive truncation
+        if "context_length_exceeded" in str(e):
+            logger.warning("Context length still exceeded, trying with more aggressive truncation")
+            # More aggressive truncation
+            max_chars = 4000 * 4  # Even more conservative
+            if len(prompt_text) > max_chars:
+                prompt_text = prompt_text[:max_chars] + "\n\n[Note: Content heavily truncated due to length limits]"
+                try:
+                    response = client.chat.completions.create(
+                        model="gpt-4-turbo-preview",
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": "You are a senior technical release note writer. Be concise but comprehensive."
+                            },
+                            {
+                                "role": "user", 
+                                "content": prompt_text
+                            }
+                        ],
+                        max_tokens=1500,
+                        temperature=0.3
+                    )
+                    logger.info("Successfully received response from OpenAI after aggressive truncation")
+                    return response.choices[0].message.content
+                except Exception as retry_e:
+                    logger.error(f"Even aggressive truncation failed: {str(retry_e)}")
+                    raise HTTPException(status_code=500, detail=f"Failed to generate release note even with truncation: {str(retry_e)}")
+        
         raise HTTPException(status_code=500, detail=f"Failed to generate release note with OpenAI: {str(e)}")
 
 @app.get("/test-jira/{ticket_key}")
