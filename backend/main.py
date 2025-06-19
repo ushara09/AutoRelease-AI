@@ -8,6 +8,7 @@ import requests
 import re
 import base64
 import json
+from typing import List
 from openai import OpenAI
 
 load_dotenv()
@@ -98,7 +99,7 @@ app.add_middleware(
 
 class GenerateReleaseNoteRequest(BaseModel):
     repo: str
-    jira_ticket: str
+    jira_tickets: List[str]  # Changed to support multiple tickets
 
 def fetch_jira_ticket_content(jira_base_url: str, jira_email: str, jira_api_token: str, ticket_key: str):
     """
@@ -192,6 +193,22 @@ Description:
 {jira_ticket.get('description', 'No description available')}
 """
     return formatted.strip()
+
+def format_multiple_jira_tickets_for_prompt(jira_tickets):
+    """
+    Format multiple JIRA tickets data for inclusion in the prompt
+    """
+    if not jira_tickets:
+        return "No JIRA tickets available"
+    
+    formatted_tickets = []
+    for i, ticket in enumerate(jira_tickets, 1):
+        ticket_section = f"=== JIRA TICKET {i} ===\n"
+        ticket_section += format_jira_ticket_for_prompt(ticket)
+        ticket_section += "\n"
+        formatted_tickets.append(ticket_section)
+    
+    return "\n".join(formatted_tickets)
 
 def format_commit_diffs_for_prompt(commit_diffs):
     """
@@ -444,7 +461,7 @@ def test_jira_connection(ticket_key: str):
 
 @app.post("/generate-release-note/")
 def generate_release_note(data: GenerateReleaseNoteRequest):
-    logger.info(f"Received request to generate release note for repo '{GITHUB_OWNER}/{data.repo}' and ticket '{data.jira_ticket}'")
+    logger.info(f"Received request to generate release note for repo '{GITHUB_OWNER}/{data.repo}' and tickets '{', '.join(data.jira_tickets)}'")
     
     # Check if required environment variables are set
     if not all([JIRA_BASE_URL, JIRA_EMAIL, JIRA_TOKEN, GITHUB_TOKEN, GITHUB_OWNER, OPENAI_API_KEY]):
@@ -469,18 +486,29 @@ def generate_release_note(data: GenerateReleaseNoteRequest):
     # Type assertions since we validated they're not None above
     assert JIRA_BASE_URL and JIRA_EMAIL and JIRA_TOKEN and GITHUB_TOKEN and GITHUB_OWNER and OPENAI_API_KEY
     
-    # First, fetch JIRA ticket content
-    try:
-        jira_content = fetch_jira_ticket_content(
-            JIRA_BASE_URL,
-            JIRA_EMAIL,
-            JIRA_TOKEN,
-            data.jira_ticket
-        )
-        logger.info(f"Successfully fetched JIRA ticket content: {jira_content['summary']}")
-    except Exception as e:
-        logger.error(f"Failed to fetch JIRA ticket content: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch JIRA ticket: {str(e)}")
+    # Fetch all JIRA tickets content
+    jira_tickets_content = []
+    failed_tickets = []
+    
+    for ticket_key in data.jira_tickets:
+        try:
+            jira_content = fetch_jira_ticket_content(
+                JIRA_BASE_URL,
+                JIRA_EMAIL,
+                JIRA_TOKEN,
+                ticket_key
+            )
+            jira_tickets_content.append(jira_content)
+            logger.info(f"Successfully fetched JIRA ticket content: {ticket_key} - {jira_content['summary']}")
+        except Exception as e:
+            logger.error(f"Failed to fetch JIRA ticket {ticket_key}: {str(e)}")
+            failed_tickets.append(ticket_key)
+    
+    if not jira_tickets_content:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch any JIRA tickets. Failed tickets: {', '.join(failed_tickets)}")
+    
+    if failed_tickets:
+        logger.warning(f"Some tickets failed to fetch: {', '.join(failed_tickets)}")
     
     # Continue with GitHub commit fetching
     headers = {
@@ -514,14 +542,27 @@ def generate_release_note(data: GenerateReleaseNoteRequest):
 
     logger.info(f"Total commits fetched: {len(all_commits)}")
 
-    pattern = rf"^\[{re.escape(data.jira_ticket)}\]"
-    matching_commits = [
-        c for c in all_commits if re.match(pattern, c['commit']['message'])
-    ]
-    logger.info(f"Found {len(matching_commits)} commits matching pattern '[{data.jira_ticket}]'.")
+    # Create patterns for all tickets and find matching commits
+    all_matching_commits = []
+    ticket_commit_count = {}
+    
+    for ticket_key in data.jira_tickets:
+        pattern = rf"^\[{re.escape(ticket_key)}\]"
+        matching_commits = [
+            c for c in all_commits if re.match(pattern, c['commit']['message'])
+        ]
+        ticket_commit_count[ticket_key] = len(matching_commits)
+        all_matching_commits.extend(matching_commits)
+        logger.info(f"Found {len(matching_commits)} commits matching pattern '[{ticket_key}]'.")
+    
+    # Remove duplicates (in case a commit mentions multiple tickets)
+    unique_commits = {c['sha']: c for c in all_matching_commits}.values()
+    unique_commits = list(unique_commits)
+    
+    logger.info(f"Total unique commits found: {len(unique_commits)}")
 
     commit_diffs = []
-    for c in matching_commits:
+    for c in unique_commits:
         sha = c['sha']
         commit_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{data.repo}/commits/{sha}"
         logger.info(f"Fetching diff for commit {sha}...")
@@ -559,13 +600,13 @@ def generate_release_note(data: GenerateReleaseNoteRequest):
         raise HTTPException(status_code=500, detail=f"Error reading prompt template: {str(e)}")
     
     # Format the data for the prompt
-    formatted_jira_ticket = format_jira_ticket_for_prompt(jira_content)
+    formatted_jira_tickets = format_multiple_jira_tickets_for_prompt(jira_tickets_content)
     formatted_commit_diffs = format_commit_diffs_for_prompt(commit_diffs)
     
     # Replace placeholders in the prompt template
     populated_prompt = prompt_template.replace(
         "<PASTE_JIRA_TICKET_CONTENT_HERE>", 
-        formatted_jira_ticket
+        formatted_jira_tickets
     ).replace(
         "<PASTE_GIT_DIFFS_HERE>", 
         formatted_commit_diffs
@@ -579,7 +620,10 @@ def generate_release_note(data: GenerateReleaseNoteRequest):
     return {
         "success": True,
         "release_note": release_note,
-        "jira_ticket_key": data.jira_ticket,
+        "jira_tickets": data.jira_tickets,
+        "successful_tickets": [ticket['key'] for ticket in jira_tickets_content],
+        "failed_tickets": failed_tickets,
+        "ticket_commit_counts": ticket_commit_count,
         "repository": f"{GITHUB_OWNER}/{data.repo}",
         "commits_processed": len(commit_diffs)
     }
@@ -587,9 +631,9 @@ def generate_release_note(data: GenerateReleaseNoteRequest):
 @app.post("/generate-release-note-debug/")
 def generate_release_note_debug(data: GenerateReleaseNoteRequest):
     """
-    Debug endpoint that returns raw JIRA ticket and commit diffs without calling OpenAI
+    Debug endpoint that returns raw JIRA tickets and commit diffs without calling OpenAI
     """
-    logger.info(f"Received debug request for repo '{GITHUB_OWNER}/{data.repo}' and ticket '{data.jira_ticket}'")
+    logger.info(f"Received debug request for repo '{GITHUB_OWNER}/{data.repo}' and tickets '{', '.join(data.jira_tickets)}'")
     
     # Check if required environment variables are set (excluding OpenAI for debug)
     if not all([JIRA_BASE_URL, JIRA_EMAIL, JIRA_TOKEN, GITHUB_TOKEN, GITHUB_OWNER]):
@@ -612,18 +656,26 @@ def generate_release_note_debug(data: GenerateReleaseNoteRequest):
     # Type assertions since we validated they're not None above
     assert JIRA_BASE_URL and JIRA_EMAIL and JIRA_TOKEN and GITHUB_TOKEN and GITHUB_OWNER
     
-    # First, fetch JIRA ticket content
-    try:
-        jira_content = fetch_jira_ticket_content(
-            JIRA_BASE_URL,
-            JIRA_EMAIL,
-            JIRA_TOKEN,
-            data.jira_ticket
-        )
-        logger.info(f"Successfully fetched JIRA ticket content: {jira_content['summary']}")
-    except Exception as e:
-        logger.error(f"Failed to fetch JIRA ticket content: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch JIRA ticket: {str(e)}")
+    # Fetch all JIRA tickets content
+    jira_tickets_content = []
+    failed_tickets = []
+    
+    for ticket_key in data.jira_tickets:
+        try:
+            jira_content = fetch_jira_ticket_content(
+                JIRA_BASE_URL,
+                JIRA_EMAIL,
+                JIRA_TOKEN,
+                ticket_key
+            )
+            jira_tickets_content.append(jira_content)
+            logger.info(f"Successfully fetched JIRA ticket content: {ticket_key} - {jira_content['summary']}")
+        except Exception as e:
+            logger.error(f"Failed to fetch JIRA ticket {ticket_key}: {str(e)}")
+            failed_tickets.append(ticket_key)
+    
+    if not jira_tickets_content:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch any JIRA tickets. Failed tickets: {', '.join(failed_tickets)}")
     
     # Continue with GitHub commit fetching
     headers = {
@@ -657,14 +709,25 @@ def generate_release_note_debug(data: GenerateReleaseNoteRequest):
 
     logger.info(f"Total commits fetched: {len(all_commits)}")
 
-    pattern = rf"^\[{re.escape(data.jira_ticket)}\]"
-    matching_commits = [
-        c for c in all_commits if re.match(pattern, c['commit']['message'])
-    ]
-    logger.info(f"Found {len(matching_commits)} commits matching pattern '[{data.jira_ticket}]'.")
+    # Create patterns for all tickets and find matching commits
+    all_matching_commits = []
+    ticket_commit_count = {}
+    
+    for ticket_key in data.jira_tickets:
+        pattern = rf"^\[{re.escape(ticket_key)}\]"
+        matching_commits = [
+            c for c in all_commits if re.match(pattern, c['commit']['message'])
+        ]
+        ticket_commit_count[ticket_key] = len(matching_commits)
+        all_matching_commits.extend(matching_commits)
+        logger.info(f"Found {len(matching_commits)} commits matching pattern '[{ticket_key}]'.")
+    
+    # Remove duplicates (in case a commit mentions multiple tickets)
+    unique_commits = {c['sha']: c for c in all_matching_commits}.values()
+    unique_commits = list(unique_commits)
 
     result = []
-    for c in matching_commits:
+    for c in unique_commits:
         sha = c['sha']
         commit_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{data.repo}/commits/{sha}"
         logger.info(f"Fetching diff for commit {sha}...")
@@ -689,7 +752,9 @@ def generate_release_note_debug(data: GenerateReleaseNoteRequest):
 
     logger.info(f"Returning {len(result)} commit diffs to client.")
     return {
-        "jira_ticket": jira_content,
+        "jira_tickets": jira_tickets_content,
+        "failed_tickets": failed_tickets,
+        "ticket_commit_counts": ticket_commit_count,
         "commit_diffs": result
     }
 

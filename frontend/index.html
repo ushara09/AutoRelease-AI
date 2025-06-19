@@ -53,7 +53,7 @@
             letter-spacing: 1px;
         }
 
-        input[type="text"], select {
+        input[type="text"], select, textarea {
             width: 100%;
             padding: 15px;
             border: 2px solid #e1e5e9;
@@ -63,11 +63,18 @@
             background: #f8f9fa;
         }
 
-        input[type="text"]:focus, select:focus {
+        input[type="text"]:focus, select:focus, textarea:focus {
             outline: none;
             border-color: #667eea;
             background: white;
             box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 60px;
+            max-height: 120px;
+            font-family: inherit;
         }
 
         /* Custom dropdown styling */
@@ -293,8 +300,9 @@
                 </div>
                 
                 <div class="form-group">
-                    <label for="jiraTicket">JIRA Ticket</label>
-                    <input type="text" id="jiraTicket" name="jiraTicket" placeholder="e.g., PROJ-123" required>
+                    <label for="jiraTickets">JIRA Tickets</label>
+                    <textarea id="jiraTickets" name="jiraTickets" placeholder="Enter JIRA tickets (one per line)&#10;e.g.:&#10;PROJ-123&#10;PROJ-124&#10;PROJ-125" required></textarea>
+                    <div class="repo-info" id="ticketInfo">Enter one or more JIRA ticket IDs, separated by new lines</div>
                 </div>
             </div>
             
@@ -326,7 +334,31 @@
         // Fetch repositories when page loads
         document.addEventListener('DOMContentLoaded', async function() {
             await loadRepositories();
+            setupTicketValidation();
         });
+
+        function setupTicketValidation() {
+            const ticketsTextarea = document.getElementById('jiraTickets');
+            const ticketInfo = document.getElementById('ticketInfo');
+
+            ticketsTextarea.addEventListener('input', function() {
+                const tickets = this.value
+                    .split('\n')
+                    .map(ticket => ticket.trim())
+                    .filter(ticket => ticket.length > 0);
+
+                if (tickets.length === 0) {
+                    ticketInfo.textContent = 'Enter one or more JIRA ticket IDs, separated by new lines';
+                    ticketInfo.className = 'repo-info';
+                } else if (tickets.length === 1) {
+                    ticketInfo.textContent = `1 ticket ready: ${tickets[0]}`;
+                    ticketInfo.className = 'repo-info highlight';
+                } else {
+                    ticketInfo.textContent = `${tickets.length} tickets ready: ${tickets.slice(0, 3).join(', ')}${tickets.length > 3 ? '...' : ''}`;
+                    ticketInfo.className = 'repo-info highlight';
+                }
+            });
+        }
 
         // Handle repository selection change
         repoSelect.addEventListener('change', function() {
@@ -432,24 +464,35 @@
             repoSelect.disabled = false;
             repoInfo.textContent = `Found ${repositories.length} repositories for ${owner}`;
             
-            // Auto-focus on JIRA ticket input since repo dropdown is now populated
-            document.getElementById('jiraTicket').focus();
+            // Auto-focus on JIRA tickets input since repo dropdown is now populated
+            document.getElementById('jiraTickets').focus();
         }
 
         form.addEventListener('submit', async function(e) {
             e.preventDefault();
             
             const repo = document.getElementById('repo').value;
-            const jiraTicket = document.getElementById('jiraTicket').value.trim();
+            const jiraTicketsText = document.getElementById('jiraTickets').value.trim();
             
-            if (!repo || !jiraTicket) {
-                showResult('Please select a repository and enter a JIRA ticket.', true);
+            if (!repo || !jiraTicketsText) {
+                showResult('Please select a repository and enter at least one JIRA ticket.', true);
+                return;
+            }
+
+            // Parse JIRA tickets from textarea (split by newlines and clean up)
+            const jiraTickets = jiraTicketsText
+                .split('\n')
+                .map(ticket => ticket.trim())
+                .filter(ticket => ticket.length > 0);
+
+            if (jiraTickets.length === 0) {
+                showResult('Please enter at least one valid JIRA ticket.', true);
                 return;
             }
 
             // Show loading state
             submitBtn.disabled = true;
-            submitBtn.textContent = 'Generating...';
+            submitBtn.textContent = `Generating for ${jiraTickets.length} ticket${jiraTickets.length > 1 ? 's' : ''}...`;
             loading.style.display = 'block';
             result.style.display = 'none';
 
@@ -461,14 +504,28 @@
                     },
                     body: JSON.stringify({
                         repo: repo,
-                        jira_ticket: jiraTicket
+                        jira_tickets: jiraTickets
                     })
                 });
 
                 const data = await response.json();
 
                 if (response.ok && data.success) {
-                    showResult(data.release_note, false);
+                    // Enhanced result display with ticket information
+                    let resultText = data.release_note;
+                    
+                    if (data.failed_tickets && data.failed_tickets.length > 0) {
+                        resultText += `\n\n--- NOTE ---\nSome tickets failed to fetch: ${data.failed_tickets.join(', ')}`;
+                    }
+                    
+                    if (data.ticket_commit_counts) {
+                        resultText += `\n\n--- COMMIT SUMMARY ---\n`;
+                        Object.entries(data.ticket_commit_counts).forEach(([ticket, count]) => {
+                            resultText += `${ticket}: ${count} commit${count !== 1 ? 's' : ''}\n`;
+                        });
+                    }
+                    
+                    showResult(resultText, false);
                 } else {
                     const errorMsg = data.detail || 'Failed to generate release note';
                     showResult(`Error: ${errorMsg}`, true);
