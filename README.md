@@ -129,9 +129,14 @@ Open your browser and navigate to `http://localhost:3000`
 
 ### 2. Generate Release Notes
 1. **Select Repository**: Choose from the auto-populated dropdown of your GitHub repositories
-2. **Enter JIRA Ticket**: Input the ticket ID (e.g., `PROJ-123`)
+2. **Enter JIRA Tickets**: Input one or more ticket IDs (one per line)
+   ```
+   PROJ-123
+   PROJ-124
+   PROJ-125
+   ```
 3. **Generate**: Click the "Generate Release Note" button
-4. **Review**: The AI will analyze the ticket and commits to create a comprehensive release note
+4. **Review**: The AI will analyze all tickets and commits to create a comprehensive release note
 
 ### 3. Commit Convention
 Ensure your commits follow the pattern: `[TICKET-ID] Your commit message`
@@ -153,7 +158,7 @@ git commit -m "[PROJ-123] Fix validation bug in login form"
   ```json
   {
     "repo": "repository-name",
-    "jira_ticket": "PROJ-123"
+    "jira_tickets": ["PROJ-123", "PROJ-124", "PROJ-125"]
   }
   ```
 
@@ -212,7 +217,7 @@ Use the debug endpoint to inspect raw data:
 ```bash
 curl -X POST http://localhost:8000/generate-release-note-debug/ \
   -H "Content-Type: application/json" \
-  -d '{"repo": "your-repo", "jira_ticket": "PROJ-123"}'
+  -d '{"repo": "your-repo", "jira_tickets": ["PROJ-123", "PROJ-124"]}'
 ```
 
 ## 🤝 Contributing
