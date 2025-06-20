@@ -112,12 +112,13 @@
         }
 
         select option:hover {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: #667eea;
             color: white;
         }
 
-        select option:checked {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        select option:checked,
+        select option:selected {
+            background: #667eea;
             color: white;
             font-weight: 600;
         }
@@ -125,6 +126,13 @@
         select option[value=""] {
             color: #999;
             font-style: italic;
+        }
+
+        select option[value=""]:checked,
+        select option[value=""]:selected {
+            background: white;
+            color: #999;
+            font-weight: normal;
         }
 
         /* Repository info styling */
