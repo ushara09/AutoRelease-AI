@@ -39,6 +39,63 @@
             font-weight: 300;
         }
 
+        /* Tab Styles */
+        .tab-container {
+            margin-bottom: 30px;
+        }
+
+        .tab-buttons {
+            display: flex;
+            background: #f1f3f4;
+            border-radius: 10px;
+            padding: 4px;
+            margin-bottom: 25px;
+        }
+
+        .tab-button {
+            flex: 1;
+            padding: 12px 20px;
+            border: none;
+            background: transparent;
+            color: #666;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .tab-button:hover {
+            background: rgba(102, 126, 234, 0.1);
+            color: #667eea;
+        }
+
+        .tab-button.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+        }
+
+        .tab-content {
+            display: none;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
         .form-group {
             margin-bottom: 25px;
         }
@@ -208,6 +265,14 @@
             box-shadow: none;
         }
 
+        .email-btn {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+        }
+
+        .email-btn:hover {
+            box-shadow: 0 10px 20px rgba(40, 167, 69, 0.3);
+        }
+
         .loading {
             display: none;
             text-align: center;
@@ -326,6 +391,11 @@
             h1 {
                 font-size: 2em;
             }
+
+            .tab-button {
+                padding: 10px 15px;
+                font-size: 12px;
+            }
         }
     </style>
 </head>
@@ -333,90 +403,130 @@
     <div class="container">
         <h1>🚀 Release Note Generator</h1>
         
-        <form id="releaseForm">
-            <div class="form-row">
-                <div class="form-group">
-                    <label for="repo">Repository</label>
-                    <div class="repo-container">
-                        <select id="repo" name="repo" required disabled>
-                            <option value="">Loading repositories...</option>
-                        </select>
-                    </div>
-                    <div class="repo-info" id="repoInfo"></div>
-                </div>
-                
-                <div class="form-group">
-                    <label for="jiraTickets">JIRA Tickets</label>
-                    <textarea id="jiraTickets" name="jiraTickets" placeholder="Enter JIRA tickets (one per line)&#10;e.g.:&#10;PROJ-123&#10;PROJ-124&#10;PROJ-125" required></textarea>
-                    <div class="repo-info" id="ticketInfo">Enter one or more JIRA ticket IDs, separated by new lines</div>
-                </div>
-            </div>
-            
-            <button type="submit" class="submit-btn" id="submitBtn">
-                Generate Release Note
-            </button>
-        </form>
-
-        <!-- Email Sending Section -->
-        <div class="container" style="margin-top: 40px; background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border: 2px solid #667eea;">
-            <h2 style="text-align: center; margin-bottom: 25px; color: #667eea; font-size: 1.8em;">📧 Send Release Email</h2>
-            
-            <form id="emailForm">
-                <div class="form-group">
-                    <label for="moduleName">Module Name</label>
-                    <input type="text" id="moduleName" name="moduleName" placeholder="e.g., Retail Webstore V1" required>
-                    <div class="repo-info" id="moduleInfo">Enter the module/application name for the email</div>
-                </div>
-                
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="gitTag">Git Tag</label>
-                        <input type="text" id="gitTag" name="gitTag" placeholder="e.g., 1.77.0-RC1" required>
-                        <div class="repo-info" id="tagInfo">Enter the release version tag</div>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="releaseNoteLink">Release Note Link</label>
-                        <input type="text" id="releaseNoteLink" name="releaseNoteLink" placeholder="https://projects.hsenidmobile.com/projects/retail-webstore/wiki/..." required>
-                        <div class="repo-info" id="linkInfo">Enter the wiki link to the release note</div>
-                    </div>
-                </div>
-                
-                <button type="submit" class="submit-btn" id="emailSubmitBtn" style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%);">
+        <!-- Tab Navigation -->
+        <div class="tab-container">
+            <div class="tab-buttons">
+                <button class="tab-button active" data-tab="generate-tab">
+                    📝 Generate Release Note
+                </button>
+                <button class="tab-button" data-tab="email-tab">
                     📧 Send Release Email
                 </button>
-            </form>
-
-            <div class="loading" id="emailLoading" style="display: none;">
-                <div class="spinner"></div>
-                <p>Sending email... Please wait.</p>
             </div>
 
-            <div class="result" id="emailResult" style="display: none;">
-                <div class="result-header">
-                    <h3>Email Status:</h3>
+            <!-- Release Note Generation Tab -->
+            <div id="generate-tab" class="tab-content active">
+                <form id="releaseForm">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="repo">Repository</label>
+                            <div class="repo-container">
+                                <select id="repo" name="repo" required disabled>
+                                    <option value="">Loading repositories...</option>
+                                </select>
+                            </div>
+                            <div class="repo-info" id="repoInfo"></div>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="jiraTickets">JIRA Tickets</label>
+                            <textarea id="jiraTickets" name="jiraTickets" placeholder="Enter JIRA tickets (one per line)&#10;e.g.:&#10;PROJ-123&#10;PROJ-124&#10;PROJ-125" required></textarea>
+                            <div class="repo-info" id="ticketInfo">Enter one or more JIRA ticket IDs, separated by new lines</div>
+                        </div>
+                    </div>
+                    
+                    <button type="submit" class="submit-btn" id="submitBtn">
+                        Generate Release Note
+                    </button>
+                </form>
+
+                <div class="loading" id="loading">
+                    <div class="spinner"></div>
+                    <p>Generating release note... This may take a few moments.</p>
                 </div>
-                <div class="release-note" id="emailStatus"></div>
-            </div>
-        </div>
 
-        <div class="loading" id="loading">
-            <div class="spinner"></div>
-            <p>Generating release note... This may take a few moments.</p>
-        </div>
-
-        <div class="result" id="result">
-            <div class="result-header">
-                <h3>Generated Release Note:</h3>
-                <button class="copy-btn" id="copyBtn" onclick="copyToClipboard()">
-                    📋 Copy to Clipboard
-                </button>
+                <div class="result" id="result">
+                    <div class="result-header">
+                        <h3>Generated Release Note:</h3>
+                        <button class="copy-btn" id="copyBtn" onclick="copyToClipboard()">
+                            📋 Copy to Clipboard
+                        </button>
+                    </div>
+                    <div class="release-note" id="releaseNote"></div>
+                </div>
             </div>
-            <div class="release-note" id="releaseNote"></div>
+
+            <!-- Email Sending Tab -->
+            <div id="email-tab" class="tab-content">
+                <form id="emailForm">
+                    <div class="form-group">
+                        <label for="moduleName">Module Name</label>
+                        <input type="text" id="moduleName" name="moduleName" placeholder="e.g., Retail Webstore V1" required>
+                        <div class="repo-info" id="moduleInfo">Enter the module/application name for the email</div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="gitTag">Git Tag</label>
+                            <input type="text" id="gitTag" name="gitTag" placeholder="e.g., 1.77.0-RC1" required>
+                            <div class="repo-info" id="tagInfo">Enter the release version tag</div>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="releaseNoteLink">Release Note Link</label>
+                            <input type="text" id="releaseNoteLink" name="releaseNoteLink" placeholder="https://projects.hsenidmobile.com/projects/retail-webstore/wiki/..." required>
+                            <div class="repo-info" id="linkInfo">Enter the wiki link to the release note</div>
+                        </div>
+                    </div>
+                    
+                    <button type="submit" class="submit-btn email-btn" id="emailSubmitBtn">
+                        📧 Send Release Email
+                    </button>
+                </form>
+
+                <div class="loading" id="emailLoading" style="display: none;">
+                    <div class="spinner"></div>
+                    <p>Sending email... Please wait.</p>
+                </div>
+
+                <div class="result" id="emailResult" style="display: none;">
+                    <div class="result-header">
+                        <h3>Email Status:</h3>
+                    </div>
+                    <div class="release-note" id="emailStatus"></div>
+                </div>
+            </div>
         </div>
     </div>
 
     <script>
+        // Tab switching functionality
+        function switchTab(tabId) {
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            
+            // Remove active class from all tab buttons
+            document.querySelectorAll('.tab-button').forEach(button => {
+                button.classList.remove('active');
+            });
+            
+            // Show selected tab content
+            document.getElementById(tabId).classList.add('active');
+            
+            // Add active class to clicked tab button
+            document.querySelector(`[data-tab="${tabId}"]`).classList.add('active');
+        }
+
+        // Add event listeners to tab buttons
+        document.querySelectorAll('.tab-button').forEach(button => {
+            button.addEventListener('click', () => {
+                const tabId = button.getAttribute('data-tab');
+                switchTab(tabId);
+            });
+        });
+
         const form = document.getElementById('releaseForm');
         const submitBtn = document.getElementById('submitBtn');
         const loading = document.getElementById('loading');
