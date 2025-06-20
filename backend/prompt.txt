@@ -48,13 +48,7 @@ Jira Ticket Content:
 Git Diffs:
 <PASTE_GIT_DIFFS_HERE>
 Release Note Template: (Replace the placeholders with your generated content.)
-GIT Location\ Branch: s138 release
-Tag: 1.111.3.2-RC3
-To clone the project and check out the tag, use the following commands
-$ git clone git@gitlab.applova.io:core/applova-api-service-v1.git
-$ git checkout 1.111.3.2-RC3
 Prerequisites
-Release Location\
 New Features and Enhancements
 Limitations
 Bug Fixes
