@@ -238,10 +238,47 @@
             display: none;
         }
 
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
         .result h3 {
             color: #333;
-            margin-bottom: 15px;
             font-size: 1.3em;
+            margin: 0;
+        }
+
+        .copy-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .copy-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+        }
+
+        .copy-btn:active {
+            transform: translateY(0);
+        }
+
+        .copy-btn.copied {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
         }
 
         .release-note {
@@ -255,6 +292,7 @@
             font-size: 14px;
             max-height: 500px;
             overflow-y: auto;
+            position: relative;
         }
 
         .error {
@@ -325,7 +363,12 @@
         </div>
 
         <div class="result" id="result">
-            <h3>Generated Release Note:</h3>
+            <div class="result-header">
+                <h3>Generated Release Note:</h3>
+                <button class="copy-btn" id="copyBtn" onclick="copyToClipboard()">
+                    📋 Copy to Clipboard
+                </button>
+            </div>
             <div class="release-note" id="releaseNote"></div>
         </div>
     </div>
@@ -554,8 +597,68 @@
             result.className = isError ? 'result error' : 'result success';
             result.style.display = 'block';
             
+            // Reset copy button state
+            const copyBtn = document.getElementById('copyBtn');
+            copyBtn.textContent = '📋 Copy to Clipboard';
+            copyBtn.classList.remove('copied');
+            
             // Scroll to result
             result.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        async function copyToClipboard() {
+            const copyBtn = document.getElementById('copyBtn');
+            const releaseNoteContent = document.getElementById('releaseNote').textContent;
+            
+            try {
+                await navigator.clipboard.writeText(releaseNoteContent);
+                
+                // Update button to show success
+                copyBtn.textContent = '✅ Copied!';
+                copyBtn.classList.add('copied');
+                
+                // Reset button after 2 seconds
+                setTimeout(() => {
+                    copyBtn.textContent = '📋 Copy to Clipboard';
+                    copyBtn.classList.remove('copied');
+                }, 2000);
+                
+            } catch (err) {
+                console.error('Failed to copy text: ', err);
+                
+                // Fallback for older browsers
+                try {
+                    const textArea = document.createElement('textarea');
+                    textArea.value = releaseNoteContent;
+                    textArea.style.position = 'fixed';
+                    textArea.style.left = '-999999px';
+                    textArea.style.top = '-999999px';
+                    document.body.appendChild(textArea);
+                    textArea.focus();
+                    textArea.select();
+                    document.execCommand('copy');
+                    textArea.remove();
+                    
+                    // Update button to show success
+                    copyBtn.textContent = '✅ Copied!';
+                    copyBtn.classList.add('copied');
+                    
+                    // Reset button after 2 seconds
+                    setTimeout(() => {
+                        copyBtn.textContent = '📋 Copy to Clipboard';
+                        copyBtn.classList.remove('copied');
+                    }, 2000);
+                    
+                } catch (fallbackErr) {
+                    console.error('Fallback copy failed: ', fallbackErr);
+                    
+                    // Show error state
+                    copyBtn.textContent = '❌ Copy Failed';
+                    setTimeout(() => {
+                        copyBtn.textContent = '📋 Copy to Clipboard';
+                    }, 2000);
+                }
+            }
         }
     </script>
 </body>
