@@ -10,6 +10,9 @@ import base64
 import json
 from typing import List
 from openai import OpenAI
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 load_dotenv()
 
@@ -19,6 +22,11 @@ JIRA_BASE_URL = os.getenv("JIRA_BASE_URL")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_OWNER = os.getenv("GITHUB_OWNER")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# Email configuration
+EMAIL_SMTP_SERVER = os.getenv("EMAIL_SMTP_SERVER", "smtp.gmail.com")
+EMAIL_SMTP_PORT = int(os.getenv("EMAIL_SMTP_PORT", "587"))
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")  # App password for JIRA_EMAIL
 
 # Initialize OpenAI client
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -100,6 +108,11 @@ app.add_middleware(
 class GenerateReleaseNoteRequest(BaseModel):
     repo: str
     jira_tickets: List[str]  # Changed to support multiple tickets
+
+class SendEmailRequest(BaseModel):
+    module_name: str
+    git_tag: str
+    release_note_link: str
 
 def fetch_jira_ticket_content(jira_base_url: str, jira_email: str, jira_api_token: str, ticket_key: str):
     """
@@ -356,6 +369,89 @@ def call_openai_with_prompt(prompt_text):
                     raise HTTPException(status_code=500, detail=f"Failed to generate release note even with truncation: {str(retry_e)}")
         
         raise HTTPException(status_code=500, detail=f"Failed to generate release note with OpenAI: {str(e)}")
+
+def send_release_email(module_name: str, git_tag: str, release_note_link: str):
+    """
+    Send release email to QA and Dev teams
+    
+    Args:
+        module_name: Name of the module/application (e.g., "Retail Webstore V1")
+        git_tag: Git tag for the release (e.g., "1.77.0-RC1")
+        release_note_link: Link to the release note wiki page
+    
+    Returns:
+        dict: Success status and message
+    """
+    logger.info(f"Sending release email for {module_name} tag: {git_tag}")
+    
+    # Check required environment variables
+    if not all([JIRA_EMAIL, EMAIL_PASSWORD]):
+        missing_vars = []
+        if not JIRA_EMAIL:
+            missing_vars.append("JIRA_EMAIL")
+        if not EMAIL_PASSWORD:
+            missing_vars.append("EMAIL_PASSWORD")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Missing email environment variables: {', '.join(missing_vars)}"
+        )
+    
+    # Type assertions since we validated they're not None above
+    assert JIRA_EMAIL and EMAIL_PASSWORD
+    
+    # Email configuration
+    sender_email = JIRA_EMAIL
+    to_email = "qa@applova.io"
+    cc_email = "devs@applova.io"
+    
+    # Email content
+    subject = f"{module_name} | {git_tag}"
+    body = f"""HI QA Team,
+
+{module_name} | {git_tag} is ready for QA testing.
+
+Wiki - {release_note_link}
+
+Thanks and regards"""
+    
+    try:
+        # Create message
+        msg = MIMEMultipart()
+        msg['From'] = sender_email
+        msg['To'] = to_email
+        msg['Cc'] = cc_email
+        msg['Subject'] = subject
+        
+        # Add body to email
+        msg.attach(MIMEText(body, 'plain'))
+        
+        # Gmail SMTP configuration
+        server = smtplib.SMTP(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT)
+        server.starttls()  # Enable encryption
+        server.login(sender_email, EMAIL_PASSWORD)
+        
+        # Send email
+        recipients = [to_email, cc_email]
+        text = msg.as_string()
+        server.sendmail(sender_email, recipients, text)
+        server.quit()
+        
+        logger.info(f"Successfully sent release email for {git_tag} to {recipients}")
+        return {
+            "success": True,
+            "message": f"Release email sent successfully for {git_tag}",
+            "recipients": recipients
+        }
+        
+    except smtplib.SMTPAuthenticationError:
+        logger.error("SMTP authentication failed - check email credentials")
+        raise HTTPException(status_code=401, detail="Email authentication failed. Check your email password.")
+    except smtplib.SMTPException as e:
+        logger.error(f"SMTP error occurred: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error sending email: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error sending email: {str(e)}")
 
 @app.get("/repositories")
 def get_repositories():
@@ -757,4 +853,18 @@ def generate_release_note_debug(data: GenerateReleaseNoteRequest):
         "ticket_commit_counts": ticket_commit_count,
         "commit_diffs": result
     }
+
+@app.post("/send-release-email/")
+def send_release_email_endpoint(data: SendEmailRequest):
+    """
+    Send release email to QA and Dev teams
+    """
+    logger.info(f"Received request to send release email for {data.module_name} tag: {data.git_tag}")
+    
+    try:
+        result = send_release_email(data.module_name, data.git_tag, data.release_note_link)
+        return result
+    except Exception as e:
+        logger.error(f"Failed to send release email: {str(e)}")
+        raise e
 

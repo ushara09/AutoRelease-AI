@@ -79,6 +79,11 @@ GITHUB_OWNER=your-github-username-or-org
 
 # OpenAI Configuration
 OPENAI_API_KEY=your-openai-api-key
+
+# Email Configuration (for sending release emails)
+EMAIL_PASSWORD=your-app-password-for-email
+EMAIL_SMTP_SERVER=smtp.gmail.com
+EMAIL_SMTP_PORT=587
 ```
 
 #### Start Backend Server
@@ -138,7 +143,27 @@ Open your browser and navigate to `http://localhost:3000`
 3. **Generate**: Click the "Generate Release Note" button
 4. **Review**: The AI will analyze all tickets and commits to create a comprehensive release note
 
-### 3. Commit Convention
+### 3. Send Release Emails
+1. **Enter Module Name**: Input the application/module name (e.g., "Retail Webstore V1")
+2. **Enter Git Tag**: Input the release version (e.g., "1.77.0-RC1")
+3. **Enter Release Note Link**: Provide the wiki URL for the release note
+4. **Send Email**: Click the "Send Release Email" button
+5. **Confirmation**: The system will send an email to qa@applova.io and cc devs@applova.io
+
+**Email Template:**
+```
+Subject: {module_name} | {git_tag}
+
+HI QA Team,
+
+{module_name} | {git_tag} is ready for QA testing.
+
+Wiki - {release_note_link}
+
+Thanks and regards
+```
+
+### 4. Commit Convention
 Ensure your commits follow the pattern: `[TICKET-ID] Your commit message`
 
 Example:
@@ -163,6 +188,16 @@ git commit -m "[PROJ-123] Fix validation bug in login form"
   ```
 
 - `POST /generate-release-note-debug/` - Debug endpoint returning raw data without AI processing
+
+### Email Management
+- `POST /send-release-email/` - Send release notification email to QA and Dev teams
+  ```json
+  {
+    "module_name": "Retail Webstore V1",
+    "git_tag": "1.77.0-RC1",
+    "release_note_link": "https://projects.hsenidmobile.com/projects/retail-webstore/wiki/1770-RC1_Release_Note"
+  }
+  ```
 
 ## 🎨 Release Note Template
 

@@ -357,6 +357,49 @@
             </button>
         </form>
 
+        <!-- Email Sending Section -->
+        <div class="container" style="margin-top: 40px; background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border: 2px solid #667eea;">
+            <h2 style="text-align: center; margin-bottom: 25px; color: #667eea; font-size: 1.8em;">📧 Send Release Email</h2>
+            
+            <form id="emailForm">
+                <div class="form-group">
+                    <label for="moduleName">Module Name</label>
+                    <input type="text" id="moduleName" name="moduleName" placeholder="e.g., Retail Webstore V1" required>
+                    <div class="repo-info" id="moduleInfo">Enter the module/application name for the email</div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="gitTag">Git Tag</label>
+                        <input type="text" id="gitTag" name="gitTag" placeholder="e.g., 1.77.0-RC1" required>
+                        <div class="repo-info" id="tagInfo">Enter the release version tag</div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="releaseNoteLink">Release Note Link</label>
+                        <input type="text" id="releaseNoteLink" name="releaseNoteLink" placeholder="https://projects.hsenidmobile.com/projects/retail-webstore/wiki/..." required>
+                        <div class="repo-info" id="linkInfo">Enter the wiki link to the release note</div>
+                    </div>
+                </div>
+                
+                <button type="submit" class="submit-btn" id="emailSubmitBtn" style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%);">
+                    📧 Send Release Email
+                </button>
+            </form>
+
+            <div class="loading" id="emailLoading" style="display: none;">
+                <div class="spinner"></div>
+                <p>Sending email... Please wait.</p>
+            </div>
+
+            <div class="result" id="emailResult" style="display: none;">
+                <div class="result-header">
+                    <h3>Email Status:</h3>
+                </div>
+                <div class="release-note" id="emailStatus"></div>
+            </div>
+        </div>
+
         <div class="loading" id="loading">
             <div class="spinner"></div>
             <p>Generating release note... This may take a few moments.</p>
@@ -604,6 +647,73 @@
             
             // Scroll to result
             result.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        // Email form submission handler
+        const emailForm = document.getElementById('emailForm');
+        const emailSubmitBtn = document.getElementById('emailSubmitBtn');
+        const emailLoading = document.getElementById('emailLoading');
+        const emailResult = document.getElementById('emailResult');
+        const emailStatus = document.getElementById('emailStatus');
+
+        emailForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const moduleName = document.getElementById('moduleName').value.trim();
+            const gitTag = document.getElementById('gitTag').value.trim();
+            const releaseNoteLink = document.getElementById('releaseNoteLink').value.trim();
+            
+            if (!moduleName || !gitTag || !releaseNoteLink) {
+                showEmailResult('Please fill in all required fields: Module Name, Git Tag, and Release Note Link.', true);
+                return;
+            }
+
+            // Show loading state
+            emailSubmitBtn.disabled = true;
+            emailSubmitBtn.textContent = 'Sending Email...';
+            emailLoading.style.display = 'block';
+            emailResult.style.display = 'none';
+
+            try {
+                const response = await fetch('http://localhost:8000/send-release-email/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        module_name: moduleName,
+                        git_tag: gitTag,
+                        release_note_link: releaseNoteLink
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                    const successMessage = `✅ ${data.message}\n\nRecipients: ${data.recipients.join(', ')}\n\nEmail Preview:\n\nSubject: ${moduleName} | ${gitTag}\n\nHI QA Team,\n\n${moduleName} | ${gitTag} is ready for QA testing.\n\nWiki - ${releaseNoteLink}\n\nThanks and regards`;
+                    showEmailResult(successMessage, false);
+                } else {
+                    const errorMsg = data.detail || 'Failed to send email';
+                    showEmailResult(`❌ Error: ${errorMsg}`, true);
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showEmailResult(`❌ Network error: ${error.message}. Make sure the backend server is running on http://localhost:8000`, true);
+            } finally {
+                // Reset button state
+                emailSubmitBtn.disabled = false;
+                emailSubmitBtn.textContent = '📧 Send Release Email';
+                emailLoading.style.display = 'none';
+            }
+        });
+
+        function showEmailResult(content, isError = false) {
+            emailStatus.textContent = content;
+            emailResult.className = isError ? 'result error' : 'result success';
+            emailResult.style.display = 'block';
+            
+            // Scroll to result
+            emailResult.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }
 
         async function copyToClipboard() {
